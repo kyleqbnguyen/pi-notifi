@@ -61,10 +61,38 @@ hypr_window_exists() {
     hyprctl clients -j | jq -e --arg address "$hypr_window_address" '.[] | select(.address == $address)' >/dev/null
 }
 
+tmux_pane_exists() {
+  [[ -n "$tmux_pane_id" ]] || return 1
+  tmux list-panes -a -F '#{pane_id}' 2>/dev/null | grep -Fxq "$tmux_pane_id"
+}
+
+saved_tmux_target() {
+  if tmux_pane_exists; then
+    printf '%s\n' "$tmux_pane_id"
+  else
+    printf '%s:%s\n' "$tmux_session_id" "$tmux_window_id"
+  fi
+}
+
 select_saved_pane() {
-  [[ -n "$tmux_pane_id" ]] || return 0
-  tmux list-panes -a -F '#{pane_id}' 2>/dev/null | grep -Fxq "$tmux_pane_id" || return 0
+  tmux_pane_exists || return 0
   tmux select-pane -t "$tmux_pane_id" 2>/dev/null || true
+}
+
+select_saved_window() {
+  tmux select-window -t "$tmux_session_id:$tmux_window_id" 2>/dev/null || true
+  select_saved_pane
+}
+
+switch_client_to_saved_target() {
+  local target
+  target="$(saved_tmux_target)"
+
+  if [[ -n "$tmux_client_tty" ]]; then
+    tmux switch-client -c "$tmux_client_tty" -t "$target" 2>/dev/null || select_saved_window
+  else
+    select_saved_window
+  fi
 }
 
 if [[ -n "$workspace_id" ]]; then
@@ -73,15 +101,8 @@ fi
 
 if hypr_window_exists; then
   hyprctl dispatch focuswindow "address:$hypr_window_address" >/dev/null || true
-
-  if [[ -n "$tmux_client_tty" ]]; then
-    tmux switch-client -c "$tmux_client_tty" -t "$tmux_window_id" 2>/dev/null || tmux select-window -t "$tmux_window_id"
-  else
-    tmux select-window -t "$tmux_window_id"
-  fi
-  select_saved_pane
+  switch_client_to_saved_target
 else
-  tmux select-window -t "$tmux_window_id"
-  select_saved_pane
+  select_saved_window
   ghostty -e tmux attach-session -t "$tmux_session_id" >/dev/null 2>&1 &
 fi

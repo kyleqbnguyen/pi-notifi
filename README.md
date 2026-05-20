@@ -120,8 +120,7 @@ Example:
   "disabled": false,
   "urgency": "normal",
   "expireTime": 0,
-  "notifyOnError": true,
-  "notifyOnAbort": false
+  "notifyOnError": true
 }
 ```
 
@@ -131,11 +130,10 @@ Available JSON fields:
 | --------------- | ------------------------------------------------ | ------------------------------------------------------------------- |
 | `disabled`      | `false`                                          | Start disabled                                                      |
 | `title`         | `<tmux-session>:<window-index>` or `pi`          | Notification title                                                  |
-| `body`          | `Task Finished` / `Task Failed` / `Task Aborted` | Notification body                                                   |
+| `body`          | `Task Finished` / `Task Failed`                  | Notification body                                                   |
 | `urgency`       | `normal` / `critical`                            | notify-send urgency                                                 |
 | `expireTime`    | `0`                                              | notify-send expire time in ms; `0` requests persist until dismissed |
 | `notifyOnError` | `true`                                           | Notify when a task fails                                            |
-| `notifyOnAbort` | `false`                                          | Notify when a task is aborted                                       |
 
 Environment variables with the old `PI_NOTIFI_*` names override JSON for quick
 one-off changes. Invalid JSON config files are ignored so a bad config does not
@@ -165,8 +163,7 @@ If the tmux window is not visible, notifi sends a persistent notification with a
 <action: Focus>
 ```
 
-Aborted tasks do not notify by default. Headless/print-mode pi runs do not
-notify.
+Headless/print-mode pi runs do not notify.
 
 ## Action target cache
 
@@ -190,20 +187,21 @@ agents and long-lived notifications do not overwrite each other.
 6. switches tmux to the saved session/window
 7. focuses the original pi pane if it still exists
 
-If the original Ghostty window no longer exists but the tmux session/window
-still exists, the action opens Ghostty attached to that tmux session/window. If
-the tmux session/window no longer exists, it exits successfully and does
-nothing.
+If no existing Ghostty/tmux client can be mapped back to Hyprland but the tmux
+session/window still exists, the action opens Ghostty attached to that tmux
+session/window. If the tmux session/window no longer exists, it exits
+successfully and does nothing.
 
 Target files for notifications dismissed without action are cleaned up the next
 time a notifi action is consumed.
 
 ## Edge cases
 
-- If multiple Ghostty windows are attached to the same tmux session, notifi
-  picks the first usable tmux client it can map back to Hyprland.
-- If the saved Ghostty/Hyprland window is stale, notifi falls back to opening
-  Ghostty attached to the saved tmux session/window.
+- If multiple Ghostty windows are attached to tmux, notifi prefers one already
+  viewing the target window, then one in the target session, then any usable tmux
+  client it can map back to Hyprland.
+- If no saved/reusable Ghostty/Hyprland window exists, notifi falls back to
+  opening Ghostty attached to the saved tmux session/window.
 - If the saved tmux session or window no longer exists, the action exits
   successfully and does nothing.
 - If the saved tmux pane no longer exists, the action still switches to the

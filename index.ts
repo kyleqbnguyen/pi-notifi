@@ -8,7 +8,7 @@ type NotifiState = {
 	enabled: boolean;
 };
 
-type TaskStatus = "finished" | "error" | "aborted";
+type TaskStatus = "finished" | "error";
 
 type NotifiConfig = {
 	disabled: boolean;
@@ -17,7 +17,6 @@ type NotifiConfig = {
 	urgency?: string;
 	expireTime?: string;
 	notifyOnError: boolean;
-	notifyOnAbort: boolean;
 };
 
 type NotifiFileConfig = Partial<{
@@ -27,7 +26,6 @@ type NotifiFileConfig = Partial<{
 	urgency: string;
 	expireTime: string | number;
 	notifyOnError: boolean;
-	notifyOnAbort: boolean;
 }>;
 
 type TmuxLocation = {
@@ -134,7 +132,6 @@ const configBoolean = (value: unknown): boolean | undefined => (typeof value ===
 
 const statusBody = (status: TaskStatus): string => {
 	if (status === "finished") return "Task Finished";
-	if (status === "aborted") return "Task Aborted";
 	return "Task Failed";
 };
 
@@ -163,7 +160,6 @@ const getConfig = async (pi: ExtensionAPI, ctx: ExtensionContext, status: TaskSt
 		urgency: env("PI_NOTIFI_URGENCY") ?? configString(fileConfig.urgency) ?? (status === "finished" ? "normal" : "critical"),
 		expireTime: env("PI_NOTIFI_EXPIRE_TIME") ?? configString(fileConfig.expireTime) ?? "0",
 		notifyOnError: !truthy(process.env.PI_NOTIFI_NOTIFY_ON_ERROR_DISABLED) && configBoolean(fileConfig.notifyOnError) !== false,
-		notifyOnAbort: truthy(process.env.PI_NOTIFI_NOTIFY_ON_ABORT) || configBoolean(fileConfig.notifyOnAbort) === true,
 	};
 };
 
@@ -217,11 +213,6 @@ const getTmuxClients = async (pi: ExtensionAPI): Promise<TmuxClient[]> => {
 const getTmuxClientsForWindow = async (pi: ExtensionAPI, location: TmuxLocation): Promise<TmuxClient[]> => {
 	const clients = await getTmuxClients(pi);
 	return clients.filter((client) => client.sessionId === location.sessionId && client.windowId === location.windowId);
-};
-
-const getTmuxClientsForSession = async (pi: ExtensionAPI, location: TmuxLocation): Promise<TmuxClient[]> => {
-	const clients = await getTmuxClients(pi);
-	return clients.filter((client) => client.sessionId === location.sessionId);
 };
 
 const getAncestorPids = async (pid: number): Promise<number[]> => {
@@ -307,17 +298,23 @@ const getPiTmuxWindowTarget = async (pi: ExtensionAPI, targetId: string): Promis
 		timestamp: Date.now(),
 	};
 
-	const [sessionClients, hyprState] = await Promise.all([getTmuxClientsForSession(pi, location), getHyprState(pi)]);
-	if (sessionClients.length === 0 || !hyprState) return baseTarget;
+	const [attachedClients, hyprState] = await Promise.all([getTmuxClients(pi), getHyprState(pi)]);
+	if (attachedClients.length === 0 || !hyprState) return baseTarget;
+
+	const targetWindowClients = attachedClients.filter(
+		(client) => client.sessionId === location.sessionId && client.windowId === location.windowId,
+	);
+	const targetSessionClients = attachedClients.filter(
+		(client) => client.sessionId === location.sessionId && client.windowId !== location.windowId,
+	);
+	const otherSessionClients = attachedClients.filter((client) => client.sessionId !== location.sessionId);
 
 	// Prefer a client already viewing the target window. If none exists, use any
-	// attached client for the same session, focus its Ghostty, then switch it to
-	// the target tmux window. This avoids opening a new Ghostty when the session
-	// is already visible but currently on a different tmux window.
-	const tmuxClients = [
-		...sessionClients.filter((client) => client.windowId === location.windowId),
-		...sessionClients.filter((client) => client.windowId !== location.windowId),
-	];
+	// attached client for the same session. Finally, fall back to any tmux client
+	// mapped to a Hyprland window; that client may have switched to another tmux
+	// session after this pi task started, but the notification action can switch
+	// it back instead of opening a new Ghostty window.
+	const tmuxClients = [...targetWindowClients, ...targetSessionClients, ...otherSessionClients];
 
 	for (const tmuxClient of tmuxClients) {
 		const hyprWindow = await findHyprWindowForTmuxClient(tmuxClient.pid, hyprState.clients);
@@ -361,7 +358,6 @@ const getStatus = (messages: unknown[]): TaskStatus => {
 		const message = messages[i] as { role?: string; stopReason?: string };
 		if (message?.role !== "assistant") continue;
 		if (message.stopReason === "error") return "error";
-		if (message.stopReason === "aborted") return "aborted";
 		return "finished";
 	}
 	return "finished";
@@ -408,7 +404,6 @@ const sendNotification = async (pi: ExtensionAPI, config: NotifiConfig, targetId
 const notify = async (pi: ExtensionAPI, ctx: ExtensionContext, status: TaskStatus) => {
 	const config = await getConfig(pi, ctx, status);
 	if (config.disabled) return;
-	if (status === "aborted" && !config.notifyOnAbort) return;
 	if (status === "error" && !config.notifyOnError) return;
 	if (await piTmuxWindowIsVisible(pi)) return;
 
