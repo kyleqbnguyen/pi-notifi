@@ -17,6 +17,7 @@ This extension assumes:
 - tmux
 - dunst or another `notify-send` compatible notification daemon
 - `notify-send` from `libnotify`
+- `jq`
 
 Install the notification pieces on Arch:
 
@@ -46,6 +47,32 @@ From another project, load this extension directly:
 
 ```bash
 pi -e /home/red/dotfiles/pi/picosystem/notifi/extensions/notifi.ts
+```
+
+## Hyprland binds
+
+```ini
+bind = SUPER, X, exec, dunstctl close
+bind = SUPER, N, exec, ~/dotfiles/hypr/scripts/notifi-focus && dunstctl close
+```
+
+`SUPER X` dismisses the current notification without action.
+
+`SUPER N` jumps to the Ghostty/tmux window that produced the latest notifi notification, then dismisses the notification.
+
+Dunst mouse behavior:
+
+```ini
+mouse_left_click = do_action, close_current
+mouse_right_click = close_current
+```
+
+Left click invokes the notification action, which runs `~/dotfiles/hypr/scripts/notifi-focus`, then closes the notification. Right click only closes the notification.
+
+The live Hyprland script is symlinked from this repo:
+
+```text
+~/dotfiles/hypr/scripts/notifi-focus -> ~/dotfiles/pi/picosystem/notifi/scripts/notifi-focus
 ```
 
 ## Commands
@@ -109,11 +136,20 @@ Notification is suppressed only when all of these are true:
 Pane focus does not matter. If the pi pane is anywhere in the visible tmux
 window, no notification is sent.
 
-If the tmux window is not visible, notifi sends:
+If the tmux window is not visible, notifi sends a persistent notification with a `Focus` action:
 
 ```text
 <title: tmux session name>
 <body: Task Finished | Task Failed>
+<action: Focus>
 ```
 
 Aborted tasks do not notify by default.
+
+When a notification is sent, notifi writes the jump target to:
+
+```text
+~/.cache/notifi/last.json
+```
+
+`scripts/notifi-focus` reads that file, switches Hyprland to the target Ghostty workspace/window, and switches tmux to the window containing pi.

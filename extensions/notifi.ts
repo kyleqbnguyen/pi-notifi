@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { access, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 
 type NotifiState = {
 	enabled: boolean;
@@ -37,11 +37,13 @@ type TmuxLocation = {
 
 type TmuxClient = {
 	pid: number;
+	tty?: string;
 	sessionId: string;
 	windowId: string;
 };
 
 type HyprClient = {
+	address?: string;
 	pid?: number;
 	mapped?: boolean;
 	hidden?: boolean;
@@ -49,6 +51,15 @@ type HyprClient = {
 	workspace?: {
 		id?: number;
 	};
+};
+
+type NotifiTarget = {
+	workspaceId: number;
+	hyprWindowAddress: string;
+	tmuxSessionId: string;
+	tmuxWindowId: string;
+	tmuxClientTty?: string;
+	timestamp: number;
 };
 
 type HyprMonitor = {
@@ -78,6 +89,8 @@ const fileExists = async (path: string): Promise<boolean> => {
 		return false;
 	}
 };
+
+const cacheFile = (): string => join(process.env.HOME ?? "/tmp", ".cache", "notifi", "last.json");
 
 const readConfigFile = async (cwd: string): Promise<NotifiFileConfig> => {
 	const paths = [join(cwd, ".pi", "notifi.json"), join(process.env.HOME ?? "", ".pi", "agent", "notifi.json")];
@@ -159,19 +172,19 @@ const getTmuxLocation = async (pi: ExtensionAPI): Promise<TmuxLocation | undefin
 
 const getTmuxClientsForWindow = async (pi: ExtensionAPI, location: TmuxLocation): Promise<TmuxClient[]> => {
 	try {
-		const result = await pi.exec("tmux", [
-			"list-clients",
-			"-F",
-			"#{client_pid}\t#{session_id}\t#{window_id}",
-		], { timeout: 2000 });
+		const result = await pi.exec(
+			"tmux",
+			["list-clients", "-F", "#{client_pid}\t#{client_tty}\t#{session_id}\t#{window_id}"],
+			{ timeout: 2000 },
+		);
 
 		return result.stdout
 			.split("\n")
 			.map((line) => line.trim())
 			.filter(Boolean)
 			.map((line) => {
-				const [pidText, sessionId, windowId] = line.split("\t");
-				return { pid: Number(pidText), sessionId, windowId };
+				const [pidText, tty, sessionId, windowId] = line.split("\t");
+				return { pid: Number(pidText), tty, sessionId, windowId };
 			})
 			.filter(
 				(client) =>
@@ -216,18 +229,22 @@ const getVisibleHyprWorkspaceIds = (monitors: HyprMonitor[]): Set<number> => {
 	return ids;
 };
 
-const hyprClientIsVisible = (client: HyprClient, visibleWorkspaceIds: Set<number>): boolean => {
-	const workspaceId = client.workspace?.id;
+const hyprClientIsUsable = (client: HyprClient): boolean => {
 	return (
-		typeof workspaceId === "number" &&
-		visibleWorkspaceIds.has(workspaceId) &&
+		typeof client.address === "string" &&
+		client.address.length > 0 &&
+		typeof client.workspace?.id === "number" &&
 		client.mapped !== false &&
-		client.hidden !== true &&
-		client.visible !== false
+		client.hidden !== true
 	);
 };
 
-const tmuxClientIsInVisibleHyprWindow = async (pi: ExtensionAPI, tmuxClientPid: number): Promise<boolean> => {
+const hyprClientIsVisible = (client: HyprClient, visibleWorkspaceIds: Set<number>): boolean => {
+	const workspaceId = client.workspace?.id;
+	return hyprClientIsUsable(client) && typeof workspaceId === "number" && visibleWorkspaceIds.has(workspaceId) && client.visible !== false;
+};
+
+const getHyprState = async (pi: ExtensionAPI): Promise<{ clients: HyprClient[]; visibleWorkspaceIds: Set<number> } | undefined> => {
 	try {
 		const [clientsResult, monitorsResult] = await Promise.all([
 			pi.exec("hyprctl", ["clients", "-j"], { timeout: 3000 }),
@@ -236,34 +253,66 @@ const tmuxClientIsInVisibleHyprWindow = async (pi: ExtensionAPI, tmuxClientPid: 
 
 		const clients = parseJsonArray<HyprClient>(clientsResult.stdout);
 		const monitors = parseJsonArray<HyprMonitor>(monitorsResult.stdout);
-		if (!clients || !monitors) return false;
+		if (!clients || !monitors) return undefined;
 
-		const visibleWorkspaceIds = getVisibleHyprWorkspaceIds(monitors);
-		const ancestorPids = new Set(await getAncestorPids(tmuxClientPid));
-
-		return clients.some(
-			(client) =>
-				typeof client.pid === "number" &&
-				ancestorPids.has(client.pid) &&
-				hyprClientIsVisible(client, visibleWorkspaceIds),
-		);
+		return { clients, visibleWorkspaceIds: getVisibleHyprWorkspaceIds(monitors) };
 	} catch {
-		return false;
+		return undefined;
 	}
+};
+
+const findHyprWindowForTmuxClient = async (
+	tmuxClientPid: number,
+	hyprClients: HyprClient[],
+): Promise<HyprClient | undefined> => {
+	const ancestorPids = new Set(await getAncestorPids(tmuxClientPid));
+	return hyprClients.find((client) => typeof client.pid === "number" && ancestorPids.has(client.pid) && hyprClientIsUsable(client));
+};
+
+const getPiTmuxWindowTarget = async (pi: ExtensionAPI): Promise<NotifiTarget | undefined> => {
+	const location = await getTmuxLocation(pi);
+	if (!location) return undefined;
+
+	const [tmuxClients, hyprState] = await Promise.all([getTmuxClientsForWindow(pi, location), getHyprState(pi)]);
+	if (tmuxClients.length === 0 || !hyprState) return undefined;
+
+	for (const tmuxClient of tmuxClients) {
+		const hyprWindow = await findHyprWindowForTmuxClient(tmuxClient.pid, hyprState.clients);
+		if (!hyprWindow || typeof hyprWindow.workspace?.id !== "number" || !hyprWindow.address) continue;
+
+		return {
+			workspaceId: hyprWindow.workspace.id,
+			hyprWindowAddress: hyprWindow.address,
+			tmuxSessionId: location.sessionId,
+			tmuxWindowId: location.windowId,
+			tmuxClientTty: tmuxClient.tty,
+			timestamp: Date.now(),
+		};
+	}
+
+	return undefined;
 };
 
 const piTmuxWindowIsVisible = async (pi: ExtensionAPI): Promise<boolean> => {
 	const location = await getTmuxLocation(pi);
 	if (!location) return false;
 
-	const tmuxClients = await getTmuxClientsForWindow(pi, location);
-	if (tmuxClients.length === 0) return false;
+	const [tmuxClients, hyprState] = await Promise.all([getTmuxClientsForWindow(pi, location), getHyprState(pi)]);
+	if (tmuxClients.length === 0 || !hyprState) return false;
 
 	for (const tmuxClient of tmuxClients) {
-		if (await tmuxClientIsInVisibleHyprWindow(pi, tmuxClient.pid)) return true;
+		const hyprWindow = await findHyprWindowForTmuxClient(tmuxClient.pid, hyprState.clients);
+		if (hyprWindow && hyprClientIsVisible(hyprWindow, hyprState.visibleWorkspaceIds)) return true;
 	}
 
 	return false;
+};
+
+const writeLastTarget = async (target: NotifiTarget | undefined): Promise<void> => {
+	if (!target) return;
+	const path = cacheFile();
+	await mkdir(dirname(path), { recursive: true });
+	await writeFile(path, `${JSON.stringify(target, null, 2)}\n`, "utf8");
 };
 
 const getStatus = (messages: unknown[]): TaskStatus => {
@@ -277,14 +326,36 @@ const getStatus = (messages: unknown[]): TaskStatus => {
 	return "finished";
 };
 
-const buildNotifySendArgs = (config: NotifiConfig): string[] => {
-	const args: string[] = [];
-	args.push("--app-name", "pi");
-	if (config.urgency) args.push("--urgency", config.urgency);
-	if (config.icon) args.push("--icon", config.icon);
-	if (config.expireTime) args.push("--expire-time", config.expireTime);
-	args.push(config.title ?? "pi", config.body ?? "Task Finished");
-	return args;
+const sendNotification = async (pi: ExtensionAPI, config: NotifiConfig): Promise<void> => {
+	await pi.exec(
+		"bash",
+		[
+			"-c",
+			[
+				"set -euo pipefail",
+				"title=$1",
+				"body=$2",
+				"urgency=$3",
+				"expire_time=$4",
+				"icon=$5",
+				"args=(--wait --action=focus=Focus --app-name pi --urgency \"$urgency\" --expire-time \"$expire_time\")",
+				"if [[ -n \"$icon\" ]]; then args+=(--icon \"$icon\"); fi",
+				"(",
+				"  action=$(notify-send \"${args[@]}\" \"$title\" \"$body\" || true)",
+				"  if [[ \"$action\" == \"focus\" ]]; then",
+				"    /home/red/dotfiles/hypr/scripts/notifi-focus >/dev/null 2>&1 || true",
+				"  fi",
+				") >/tmp/notifi-action.log 2>&1 &",
+			].join("\n"),
+			"notifi-send",
+			config.title ?? "pi",
+			config.body ?? "Task Finished",
+			config.urgency ?? "normal",
+			config.expireTime ?? "0",
+			config.icon ?? "",
+		],
+		{ timeout: 5000 },
+	);
 };
 
 const notify = async (pi: ExtensionAPI, ctx: ExtensionContext, status: TaskStatus) => {
@@ -295,7 +366,8 @@ const notify = async (pi: ExtensionAPI, ctx: ExtensionContext, status: TaskStatu
 	if (await piTmuxWindowIsVisible(pi)) return;
 
 	try {
-		await pi.exec("notify-send", buildNotifySendArgs(config), { timeout: 5000 });
+		await writeLastTarget(await getPiTmuxWindowTarget(pi));
+		await sendNotification(pi, config);
 	} catch (error) {
 		if (ctx.hasUI) {
 			ctx.ui.notify(

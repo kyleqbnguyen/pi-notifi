@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+state_file="${XDG_CACHE_HOME:-$HOME/.cache}/notifi/last.json"
+
+if [[ ! -f "$state_file" ]]; then
+  exit 1
+fi
+
+workspace_id="$(jq -r '.workspaceId // empty' "$state_file")"
+hypr_window_address="$(jq -r '.hyprWindowAddress // empty' "$state_file")"
+tmux_window_id="$(jq -r '.tmuxWindowId // empty' "$state_file")"
+tmux_client_tty="$(jq -r '.tmuxClientTty // empty' "$state_file")"
+
+if [[ -z "$workspace_id" || -z "$hypr_window_address" || -z "$tmux_window_id" ]]; then
+  exit 1
+fi
+
+hyprctl dispatch workspace "$workspace_id" >/dev/null
+hyprctl dispatch focuswindow "address:$hypr_window_address" >/dev/null
+
+if [[ -n "$tmux_client_tty" ]]; then
+  tmux switch-client -c "$tmux_client_tty" -t "$tmux_window_id"
+else
+  tmux switch-client -t "$tmux_window_id"
+fi
