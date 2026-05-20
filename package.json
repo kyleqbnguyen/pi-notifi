@@ -20,7 +20,7 @@
   ],
   "type": "module",
   "files": [
-    "extensions/",
+    "index.ts",
     "scripts/",
     "examples/",
     "README.md"
@@ -31,7 +31,7 @@
   },
   "pi": {
     "extensions": [
-      "./extensions/notifi.ts"
+      "./index.ts"
     ]
   },
   "peerDependencies": {

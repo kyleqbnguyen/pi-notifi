@@ -59,7 +59,7 @@ pi -e /absolute/path/to/pi-notifi
 The package manifest loads:
 
 ```text
-extensions/notifi.ts
+index.ts
 ```
 
 No manual symlink is required. The extension invokes the packaged focus helper
