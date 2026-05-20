@@ -6,10 +6,17 @@ targets_dir="${XDG_CACHE_HOME:-$HOME/.cache}/notifi/targets"
 
 prune_targets() {
   [[ -d "$targets_dir" ]] || return 0
-  find "$targets_dir" -maxdepth 1 -type f -name '*.json' -mtime +1 -delete 2>/dev/null || true
+  find "$targets_dir" -maxdepth 1 -type f -name '*.json' -mmin +1440 -delete 2>/dev/null || true
 }
 
 if [[ -z "$target_id" ]]; then
+  prune_targets
+  exit 0
+fi
+
+# notifi currently generates UUIDs. Reject anything path-like so this helper
+# cannot be used to read/delete files outside the target cache directory.
+if [[ ! "$target_id" =~ ^[0-9a-fA-F-]{36}$ ]]; then
   prune_targets
   exit 0
 fi
@@ -21,11 +28,17 @@ if [[ ! -f "$state_file" ]]; then
   exit 0
 fi
 
-workspace_id="$(jq -r '.workspaceId // empty' "$state_file")"
-hypr_window_address="$(jq -r '.hyprWindowAddress // empty' "$state_file")"
-tmux_session_id="$(jq -r '.tmuxSessionId // empty' "$state_file")"
-tmux_window_id="$(jq -r '.tmuxWindowId // empty' "$state_file")"
-tmux_client_tty="$(jq -r '.tmuxClientTty // empty' "$state_file")"
+consume_bad_target() {
+  rm -f -- "$state_file"
+  prune_targets
+  exit 0
+}
+
+workspace_id="$(jq -r '.workspaceId // empty' "$state_file" 2>/dev/null)" || consume_bad_target
+hypr_window_address="$(jq -r '.hyprWindowAddress // empty' "$state_file" 2>/dev/null)" || consume_bad_target
+tmux_session_id="$(jq -r '.tmuxSessionId // empty' "$state_file" 2>/dev/null)" || consume_bad_target
+tmux_window_id="$(jq -r '.tmuxWindowId // empty' "$state_file" 2>/dev/null)" || consume_bad_target
+tmux_client_tty="$(jq -r '.tmuxClientTty // empty' "$state_file" 2>/dev/null)" || consume_bad_target
 
 rm -f -- "$state_file"
 prune_targets
@@ -48,11 +61,11 @@ hypr_window_exists() {
 }
 
 if [[ -n "$workspace_id" ]]; then
-  hyprctl dispatch workspace "$workspace_id" >/dev/null
+  hyprctl dispatch workspace "$workspace_id" >/dev/null || true
 fi
 
 if hypr_window_exists; then
-  hyprctl dispatch focuswindow "address:$hypr_window_address" >/dev/null
+  hyprctl dispatch focuswindow "address:$hypr_window_address" >/dev/null || true
 
   if [[ -n "$tmux_client_tty" ]]; then
     tmux switch-client -c "$tmux_client_tty" -t "$tmux_window_id" 2>/dev/null || tmux select-window -t "$tmux_window_id"

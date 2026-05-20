@@ -18,12 +18,13 @@ This extension assumes:
 - tmux
 - dunst or another `notify-send` compatible notification daemon
 - `notify-send` from `libnotify`
+- `dunstctl` if using the example Hyprland binds
 - `jq`
 
 Install the notification pieces on Arch:
 
 ```bash
-sudo pacman -S libnotify dunst
+sudo pacman -S libnotify dunst jq
 ```
 
 Your pi shell must be running inside tmux, and that tmux client must be inside a
@@ -91,7 +92,7 @@ Inside pi:
 
 ## Configuration
 
-Configuration is read from the first file that exists:
+Configuration is read from the first valid JSON file that exists:
 
 1. `<project>/.pi/notifi.json`
 2. `~/.pi/agent/notifi.json`
@@ -122,7 +123,8 @@ Available JSON fields:
 | `notifyOnAbort` | `false`                                          | Notify when a task is aborted                                       |
 
 Environment variables with the old `PI_NOTIFI_*` names still override JSON for
-quick one-off changes.
+quick one-off changes. Invalid JSON config files are ignored so a bad local
+config does not break notification delivery.
 
 ## Behavior
 
@@ -155,4 +157,13 @@ When a notification is sent, notifi writes that notification's jump target to:
 
 Each notification action captures its own target id, so multiple concurrent pi agents and long-lived notifications do not overwrite each other.
 
-`scripts/notifi-focus <target-id>` reads that file, deletes it, prunes target files older than 1 day, switches Hyprland to the target Ghostty workspace/window, and switches tmux to the window containing pi. If the original Ghostty window no longer exists but the tmux session/window still exists, it opens Ghostty and attaches to the saved tmux session/window. If the tmux session/window no longer exists, it does nothing.
+`scripts/notifi-focus <target-id>` reads that file, deletes it, prunes target files older than 24 hours, switches Hyprland to the target Ghostty workspace/window, and switches tmux to the window containing pi. If the original Ghostty window no longer exists but the tmux session/window still exists, it opens Ghostty and attaches to the saved tmux session/window. If the tmux session/window no longer exists, it does nothing.
+
+Target files for notifications dismissed without action are cleaned up the next time a notifi action is consumed.
+
+## Edge cases
+
+- If multiple Ghostty windows are attached to the same tmux session, notifi picks the first usable tmux client it can map back to Hyprland.
+- If the saved Ghostty/Hyprland window is stale, notifi falls back to opening Ghostty attached to the saved tmux session/window.
+- If the saved tmux session or window no longer exists, the action exits successfully and does nothing.
+- If the target file is missing, malformed, or older than 24 hours when pruning runs, the action exits successfully and/or removes stale metadata.

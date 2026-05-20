@@ -106,7 +106,7 @@ const readConfigFile = async (cwd: string): Promise<NotifiFileConfig> => {
 			const raw = await readFile(path, "utf8");
 			return JSON.parse(raw) as NotifiFileConfig;
 		} catch {
-			return {};
+			continue;
 		}
 	}
 
