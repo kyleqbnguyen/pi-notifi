@@ -1,0 +1,27 @@
+{
+  "name": "pi-notifi",
+  "version": "0.1.0",
+  "description": "Pi extension that sends a desktop notification when pi finishes a task.",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "notifications",
+    "dunst",
+    "notify-send"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./extensions/notifi.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "latest",
+    "@types/node": "latest",
+    "typescript": "latest"
+  }
+}
