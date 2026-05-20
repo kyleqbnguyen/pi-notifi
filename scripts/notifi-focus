@@ -2,14 +2,22 @@
 set -euo pipefail
 
 target_id="${1:-}"
+targets_dir="${XDG_CACHE_HOME:-$HOME/.cache}/notifi/targets"
+
+prune_targets() {
+  [[ -d "$targets_dir" ]] || return 0
+  find "$targets_dir" -maxdepth 1 -type f -name '*.json' -mtime +1 -delete 2>/dev/null || true
+}
 
 if [[ -z "$target_id" ]]; then
+  prune_targets
   exit 0
 fi
 
-state_file="${XDG_CACHE_HOME:-$HOME/.cache}/notifi/targets/${target_id}.json"
+state_file="$targets_dir/${target_id}.json"
 
 if [[ ! -f "$state_file" ]]; then
+  prune_targets
   exit 0
 fi
 
@@ -18,6 +26,9 @@ hypr_window_address="$(jq -r '.hyprWindowAddress // empty' "$state_file")"
 tmux_session_id="$(jq -r '.tmuxSessionId // empty' "$state_file")"
 tmux_window_id="$(jq -r '.tmuxWindowId // empty' "$state_file")"
 tmux_client_tty="$(jq -r '.tmuxClientTty // empty' "$state_file")"
+
+rm -f -- "$state_file"
+prune_targets
 
 if [[ -z "$tmux_session_id" || -z "$tmux_window_id" ]]; then
   exit 0

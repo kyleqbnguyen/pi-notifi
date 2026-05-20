@@ -155,4 +155,4 @@ When a notification is sent, notifi writes that notification's jump target to:
 
 Each notification action captures its own target id, so multiple concurrent pi agents and long-lived notifications do not overwrite each other.
 
-`scripts/notifi-focus <target-id>` reads that file, switches Hyprland to the target Ghostty workspace/window, and switches tmux to the window containing pi. If the original Ghostty window no longer exists but the tmux session/window still exists, it opens Ghostty and attaches to the saved tmux session/window. If the tmux session/window no longer exists, it does nothing.
+`scripts/notifi-focus <target-id>` reads that file, deletes it, prunes target files older than 1 day, switches Hyprland to the target Ghostty workspace/window, and switches tmux to the window containing pi. If the original Ghostty window no longer exists but the tmux session/window still exists, it opens Ghostty and attaches to the saved tmux session/window. If the tmux session/window no longer exists, it does nothing.

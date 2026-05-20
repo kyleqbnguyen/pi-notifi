@@ -101,8 +101,13 @@ const readConfigFile = async (cwd: string): Promise<NotifiFileConfig> => {
 
 	for (const path of paths) {
 		if (!path || !(await fileExists(path))) continue;
-		const raw = await readFile(path, "utf8");
-		return JSON.parse(raw) as NotifiFileConfig;
+
+		try {
+			const raw = await readFile(path, "utf8");
+			return JSON.parse(raw) as NotifiFileConfig;
+		} catch {
+			return {};
+		}
 	}
 
 	return {};
