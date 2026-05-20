@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
+import { join } from "node:path";
 
 type NotifiState = {
 	enabled: boolean;
@@ -8,18 +9,26 @@ type NotifiState = {
 type TaskStatus = "finished" | "error" | "aborted";
 
 type NotifiConfig = {
-	command: string;
+	disabled: boolean;
+	title?: string;
+	body?: string;
+	urgency?: string;
+	icon?: string;
+	expireTime?: string;
+	notifyOnError: boolean;
+	notifyOnAbort: boolean;
+};
+
+type NotifiFileConfig = Partial<{
+	disabled: boolean;
 	title: string;
 	body: string;
 	urgency: string;
-	appName?: string;
-	icon?: string;
-	expireTime?: string;
-	onErrorOnly: boolean;
+	icon: string;
+	expireTime: string | number;
+	notifyOnError: boolean;
 	notifyOnAbort: boolean;
-	focusAware: boolean;
-	bellFallback: boolean;
-};
+}>;
 
 type TmuxLocation = {
 	sessionId: string;
@@ -56,15 +65,39 @@ const truthy = (value: string | undefined): boolean => {
 	return ["1", "true", "yes", "on"].includes(value.toLowerCase());
 };
 
-const falsy = (value: string | undefined): boolean => {
-	if (!value) return false;
-	return ["0", "false", "no", "off"].includes(value.toLowerCase());
+const env = (name: string): string | undefined => {
+	const value = process.env[name];
+	return value && value.trim().length > 0 ? value : undefined;
 };
 
-const env = (name: string, fallback?: string): string | undefined => {
-	const value = process.env[name];
-	return value && value.trim().length > 0 ? value : fallback;
+const fileExists = async (path: string): Promise<boolean> => {
+	try {
+		await access(path);
+		return true;
+	} catch {
+		return false;
+	}
 };
+
+const readConfigFile = async (cwd: string): Promise<NotifiFileConfig> => {
+	const paths = [join(cwd, ".pi", "notifi.json"), join(process.env.HOME ?? "", ".pi", "agent", "notifi.json")];
+
+	for (const path of paths) {
+		if (!path || !(await fileExists(path))) continue;
+		const raw = await readFile(path, "utf8");
+		return JSON.parse(raw) as NotifiFileConfig;
+	}
+
+	return {};
+};
+
+const configString = (value: unknown): string | undefined => {
+	if (typeof value === "string" && value.trim().length > 0) return value;
+	if (typeof value === "number") return String(value);
+	return undefined;
+};
+
+const configBoolean = (value: unknown): boolean | undefined => (typeof value === "boolean" ? value : undefined);
 
 const statusBody = (status: TaskStatus): string => {
 	if (status === "finished") return "Task Finished";
@@ -84,21 +117,18 @@ const getTmuxSessionTitle = async (pi: ExtensionAPI): Promise<string | undefined
 	}
 };
 
-const getConfig = async (pi: ExtensionAPI, status: TaskStatus): Promise<NotifiConfig> => {
-	const tmuxTitle = await getTmuxSessionTitle(pi);
+const getConfig = async (pi: ExtensionAPI, ctx: ExtensionContext, status: TaskStatus): Promise<NotifiConfig> => {
+	const [tmuxTitle, fileConfig] = await Promise.all([getTmuxSessionTitle(pi), readConfigFile(ctx.cwd)]);
 
 	return {
-		command: env("PI_NOTIFI_COMMAND", "notify-send")!,
-		title: env("PI_NOTIFI_TITLE", tmuxTitle ?? "pi")!,
-		body: env("PI_NOTIFI_BODY", statusBody(status))!,
-		urgency: env("PI_NOTIFI_URGENCY", status === "finished" ? "normal" : "critical")!,
-		appName: env("PI_NOTIFI_APP_NAME", "pi"),
-		icon: env("PI_NOTIFI_ICON"),
-		expireTime: env("PI_NOTIFI_EXPIRE_TIME", "0"),
-		onErrorOnly: truthy(process.env.PI_NOTIFI_ON_ERROR_ONLY),
-		notifyOnAbort: truthy(process.env.PI_NOTIFI_NOTIFY_ON_ABORT),
-		focusAware: !falsy(process.env.PI_NOTIFI_FOCUS_AWARE),
-		bellFallback: process.env.PI_NOTIFI_BELL_FALLBACK !== "0",
+		disabled: truthy(process.env.PI_NOTIFI_DISABLED) || configBoolean(fileConfig.disabled) === true,
+		title: env("PI_NOTIFI_TITLE") ?? configString(fileConfig.title) ?? tmuxTitle ?? "pi",
+		body: env("PI_NOTIFI_BODY") ?? configString(fileConfig.body) ?? statusBody(status),
+		urgency: env("PI_NOTIFI_URGENCY") ?? configString(fileConfig.urgency) ?? (status === "finished" ? "normal" : "critical"),
+		icon: env("PI_NOTIFI_ICON") ?? configString(fileConfig.icon),
+		expireTime: env("PI_NOTIFI_EXPIRE_TIME") ?? configString(fileConfig.expireTime) ?? "0",
+		notifyOnError: !truthy(process.env.PI_NOTIFI_NOTIFY_ON_ERROR_DISABLED) && configBoolean(fileConfig.notifyOnError) !== false,
+		notifyOnAbort: truthy(process.env.PI_NOTIFI_NOTIFY_ON_ABORT) || configBoolean(fileConfig.notifyOnAbort) === true,
 	};
 };
 
@@ -249,27 +279,27 @@ const getStatus = (messages: unknown[]): TaskStatus => {
 
 const buildNotifySendArgs = (config: NotifiConfig): string[] => {
 	const args: string[] = [];
-	if (config.appName) args.push("--app-name", config.appName);
+	args.push("--app-name", "pi");
 	if (config.urgency) args.push("--urgency", config.urgency);
 	if (config.icon) args.push("--icon", config.icon);
 	if (config.expireTime) args.push("--expire-time", config.expireTime);
-	args.push(config.title, config.body);
+	args.push(config.title ?? "pi", config.body ?? "Task Finished");
 	return args;
 };
 
 const notify = async (pi: ExtensionAPI, ctx: ExtensionContext, status: TaskStatus) => {
-	const config = await getConfig(pi, status);
+	const config = await getConfig(pi, ctx, status);
+	if (config.disabled) return;
 	if (status === "aborted" && !config.notifyOnAbort) return;
-	if (config.onErrorOnly && status === "finished") return;
-	if (config.focusAware && (await piTmuxWindowIsVisible(pi))) return;
+	if (status === "error" && !config.notifyOnError) return;
+	if (await piTmuxWindowIsVisible(pi)) return;
 
 	try {
-		await pi.exec(config.command, buildNotifySendArgs(config), { timeout: 5000 });
+		await pi.exec("notify-send", buildNotifySendArgs(config), { timeout: 5000 });
 	} catch (error) {
-		if (config.bellFallback) process.stdout.write("\u0007");
 		if (ctx.hasUI) {
 			ctx.ui.notify(
-				`notifi: ${config.command} failed: ${error instanceof Error ? error.message : String(error)}`,
+				`notifi: notify-send failed: ${error instanceof Error ? error.message : String(error)}`,
 				"warning",
 			);
 		}
@@ -278,7 +308,7 @@ const notify = async (pi: ExtensionAPI, ctx: ExtensionContext, status: TaskStatu
 
 export default function (pi: ExtensionAPI) {
 	let state: NotifiState = {
-		enabled: !truthy(process.env.PI_NOTIFI_DISABLED),
+		enabled: true,
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
