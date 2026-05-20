@@ -124,12 +124,6 @@ Example:
 }
 ```
 
-An example file is included at:
-
-```text
-examples/notifi.json
-```
-
 Available JSON fields:
 
 | Field           | Default                                          | Description                                                         |
