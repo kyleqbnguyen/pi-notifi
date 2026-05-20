@@ -68,7 +68,8 @@ Environment variables:
 | `PI_NOTIFI_APP_NAME` | `pi` | notify-send app name |
 | `PI_NOTIFI_ICON` | unset | notify-send icon |
 | `PI_NOTIFI_EXPIRE_TIME` | `0` | notify-send expire time in ms; `0` requests persistence until dismissed |
-| `PI_NOTIFI_ON_ERROR_ONLY=1` | unset | Only notify on error/abort |
+| `PI_NOTIFI_ON_ERROR_ONLY=1` | unset | Only notify on errors; aborts still require `PI_NOTIFI_NOTIFY_ON_ABORT=1` |
+| `PI_NOTIFI_NOTIFY_ON_ABORT=1` | unset | Notify when a task is aborted |
 | `PI_NOTIFI_BELL_FALLBACK=0` | enabled | Disable terminal bell fallback if notify-send fails |
 
 Example:

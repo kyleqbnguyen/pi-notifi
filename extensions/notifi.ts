@@ -13,6 +13,7 @@ type NotifiConfig = {
 	icon?: string;
 	expireTime?: string;
 	onErrorOnly: boolean;
+	notifyOnAbort: boolean;
 	bellFallback: boolean;
 };
 
@@ -60,6 +61,7 @@ const getConfig = async (
 		icon: env("PI_NOTIFI_ICON"),
 		expireTime: env("PI_NOTIFI_EXPIRE_TIME", "0"),
 		onErrorOnly: truthy(process.env.PI_NOTIFI_ON_ERROR_ONLY),
+		notifyOnAbort: truthy(process.env.PI_NOTIFI_NOTIFY_ON_ABORT),
 		bellFallback: process.env.PI_NOTIFI_BELL_FALLBACK !== "0",
 	};
 };
@@ -87,6 +89,7 @@ const buildNotifySendArgs = (config: NotifiConfig): string[] => {
 
 const notify = async (pi: ExtensionAPI, ctx: ExtensionContext, status: "finished" | "error" | "aborted") => {
 	const config = await getConfig(pi, ctx, status);
+	if (status === "aborted" && !config.notifyOnAbort) return;
 	if (config.onErrorOnly && status === "finished") return;
 
 	try {
