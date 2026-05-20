@@ -1,26 +1,54 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-state_file="${XDG_CACHE_HOME:-$HOME/.cache}/notifi/last.json"
+target_id="${1:-}"
+
+if [[ -z "$target_id" ]]; then
+  exit 0
+fi
+
+state_file="${XDG_CACHE_HOME:-$HOME/.cache}/notifi/targets/${target_id}.json"
 
 if [[ ! -f "$state_file" ]]; then
-  exit 1
+  exit 0
 fi
 
 workspace_id="$(jq -r '.workspaceId // empty' "$state_file")"
 hypr_window_address="$(jq -r '.hyprWindowAddress // empty' "$state_file")"
+tmux_session_id="$(jq -r '.tmuxSessionId // empty' "$state_file")"
 tmux_window_id="$(jq -r '.tmuxWindowId // empty' "$state_file")"
 tmux_client_tty="$(jq -r '.tmuxClientTty // empty' "$state_file")"
 
-if [[ -z "$workspace_id" || -z "$hypr_window_address" || -z "$tmux_window_id" ]]; then
-  exit 1
+if [[ -z "$tmux_session_id" || -z "$tmux_window_id" ]]; then
+  exit 0
 fi
 
-hyprctl dispatch workspace "$workspace_id" >/dev/null
-hyprctl dispatch focuswindow "address:$hypr_window_address" >/dev/null
+if ! tmux has-session -t "$tmux_session_id" 2>/dev/null; then
+  exit 0
+fi
 
-if [[ -n "$tmux_client_tty" ]]; then
-  tmux switch-client -c "$tmux_client_tty" -t "$tmux_window_id"
+if ! tmux list-windows -t "$tmux_session_id" -F '#{window_id}' | grep -Fxq "$tmux_window_id"; then
+  exit 0
+fi
+
+hypr_window_exists() {
+  [[ -n "$hypr_window_address" ]] && \
+    hyprctl clients -j | jq -e --arg address "$hypr_window_address" '.[] | select(.address == $address)' >/dev/null
+}
+
+if [[ -n "$workspace_id" ]]; then
+  hyprctl dispatch workspace "$workspace_id" >/dev/null
+fi
+
+if hypr_window_exists; then
+  hyprctl dispatch focuswindow "address:$hypr_window_address" >/dev/null
+
+  if [[ -n "$tmux_client_tty" ]]; then
+    tmux switch-client -c "$tmux_client_tty" -t "$tmux_window_id" 2>/dev/null || tmux select-window -t "$tmux_window_id"
+  else
+    tmux select-window -t "$tmux_window_id"
+  fi
 else
-  tmux switch-client -t "$tmux_window_id"
+  tmux select-window -t "$tmux_window_id"
+  ghostty -e tmux attach-session -t "$tmux_session_id" >/dev/null 2>&1 &
 fi

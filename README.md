@@ -1,7 +1,8 @@
 # notifi
 
-A pi extension that sends desktop notifications when pi finishes a task, unless
-the tmux window containing the pi agent is currently visible in Hyprland.
+A pi extension that sends desktop notifications when pi finishes an interactive
+task, unless the tmux window containing the pi agent is currently visible in
+Hyprland.
 
 This is intentionally not portable. Pi extensions are easy to iterate on
 locally, so if your system differs, copy this extension and adapt it for your
@@ -53,12 +54,12 @@ pi -e /home/red/dotfiles/pi/picosystem/notifi/extensions/notifi.ts
 
 ```ini
 bind = SUPER, X, exec, dunstctl close
-bind = SUPER, N, exec, ~/dotfiles/hypr/scripts/notifi-focus && dunstctl close
+bind = SUPER, N, exec, dunstctl action 0 && dunstctl close
 ```
 
 `SUPER X` dismisses the current notification without action.
 
-`SUPER N` jumps to the Ghostty/tmux window that produced the latest notifi notification, then dismisses the notification.
+`SUPER N` invokes the focused notification's action, then dismisses it. For notifi notifications, that action jumps to the Ghostty/tmux window that produced that specific notification. If that Ghostty window was closed but the tmux session/window still exists, it opens a new Ghostty attached to that tmux session/window.
 
 Dunst mouse behavior:
 
@@ -112,7 +113,7 @@ Available JSON fields:
 | Field           | Default                                          | Description                                                         |
 | --------------- | ------------------------------------------------ | ------------------------------------------------------------------- |
 | `disabled`      | `false`                                          | Start disabled                                                      |
-| `title`         | `<tmux-session>` or `pi`                         | Notification title                                                  |
+| `title`         | `<tmux-session>:<window-index>` or `pi`          | Notification title                                                  |
 | `body`          | `Task Finished` / `Task Failed` / `Task Aborted` | Notification body                                                   |
 | `urgency`       | `normal` / `critical`                            | notify-send urgency                                                 |
 | `icon`          | unset                                            | notify-send icon                                                    |
@@ -139,17 +140,19 @@ window, no notification is sent.
 If the tmux window is not visible, notifi sends a persistent notification with a `Focus` action:
 
 ```text
-<title: tmux session name>
+<title: tmux-session:window-index>
 <body: Task Finished | Task Failed>
 <action: Focus>
 ```
 
-Aborted tasks do not notify by default.
+Aborted tasks do not notify by default. Headless/print-mode pi runs do not notify.
 
-When a notification is sent, notifi writes the jump target to:
+When a notification is sent, notifi writes that notification's jump target to:
 
 ```text
-~/.cache/notifi/last.json
+~/.cache/notifi/targets/<target-id>.json
 ```
 
-`scripts/notifi-focus` reads that file, switches Hyprland to the target Ghostty workspace/window, and switches tmux to the window containing pi.
+Each notification action captures its own target id, so multiple concurrent pi agents and long-lived notifications do not overwrite each other.
+
+`scripts/notifi-focus <target-id>` reads that file, switches Hyprland to the target Ghostty workspace/window, and switches tmux to the window containing pi. If the original Ghostty window no longer exists but the tmux session/window still exists, it opens Ghostty and attaches to the saved tmux session/window. If the tmux session/window no longer exists, it does nothing.

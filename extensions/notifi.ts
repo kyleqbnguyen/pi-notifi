@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { randomUUID } from "node:crypto";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
@@ -33,6 +34,8 @@ type NotifiFileConfig = Partial<{
 type TmuxLocation = {
 	sessionId: string;
 	windowId: string;
+	sessionName?: string;
+	windowIndex?: string;
 };
 
 type TmuxClient = {
@@ -54,8 +57,9 @@ type HyprClient = {
 };
 
 type NotifiTarget = {
-	workspaceId: number;
-	hyprWindowAddress: string;
+	id: string;
+	workspaceId?: number;
+	hyprWindowAddress?: string;
 	tmuxSessionId: string;
 	tmuxWindowId: string;
 	tmuxClientTty?: string;
@@ -90,7 +94,7 @@ const fileExists = async (path: string): Promise<boolean> => {
 	}
 };
 
-const cacheFile = (): string => join(process.env.HOME ?? "/tmp", ".cache", "notifi", "last.json");
+const targetFile = (targetId: string): string => join(process.env.HOME ?? "/tmp", ".cache", "notifi", "targets", `${targetId}.json`);
 
 const readConfigFile = async (cwd: string): Promise<NotifiFileConfig> => {
 	const paths = [join(cwd, ".pi", "notifi.json"), join(process.env.HOME ?? "", ".pi", "agent", "notifi.json")];
@@ -119,12 +123,15 @@ const statusBody = (status: TaskStatus): string => {
 };
 
 const getTmuxSessionTitle = async (pi: ExtensionAPI): Promise<string | undefined> => {
-	if (!process.env.TMUX) return undefined;
+	const pane = process.env.TMUX_PANE;
+	if (!process.env.TMUX || !pane) return undefined;
 
 	try {
-		const result = await pi.exec("tmux", ["display-message", "-p", "#S"], { timeout: 2000 });
-		const session = result.stdout.trim();
-		return session || undefined;
+		const result = await pi.exec("tmux", ["display-message", "-p", "-t", pane, "#S:#{window_index}"], {
+			timeout: 2000,
+		});
+		const title = result.stdout.trim();
+		return title || undefined;
 	} catch {
 		return undefined;
 	}
@@ -159,18 +166,18 @@ const getTmuxLocation = async (pi: ExtensionAPI): Promise<TmuxLocation | undefin
 	if (!process.env.TMUX || !pane) return undefined;
 
 	try {
-		const result = await pi.exec("tmux", ["display-message", "-p", "-t", pane, "#{session_id}\t#{window_id}"], {
+		const result = await pi.exec("tmux", ["display-message", "-p", "-t", pane, "#{session_id}\t#{window_id}\t#S\t#{window_index}"], {
 			timeout: 2000,
 		});
-		const [sessionId, windowId] = result.stdout.trim().split("\t");
+		const [sessionId, windowId, sessionName, windowIndex] = result.stdout.trim().split("\t");
 		if (!sessionId || !windowId) return undefined;
-		return { sessionId, windowId };
+		return { sessionId, windowId, sessionName, windowIndex };
 	} catch {
 		return undefined;
 	}
 };
 
-const getTmuxClientsForWindow = async (pi: ExtensionAPI, location: TmuxLocation): Promise<TmuxClient[]> => {
+const getTmuxClients = async (pi: ExtensionAPI): Promise<TmuxClient[]> => {
 	try {
 		const result = await pi.exec(
 			"tmux",
@@ -186,16 +193,20 @@ const getTmuxClientsForWindow = async (pi: ExtensionAPI, location: TmuxLocation)
 				const [pidText, tty, sessionId, windowId] = line.split("\t");
 				return { pid: Number(pidText), tty, sessionId, windowId };
 			})
-			.filter(
-				(client) =>
-					Number.isInteger(client.pid) &&
-					client.pid > 0 &&
-					client.sessionId === location.sessionId &&
-					client.windowId === location.windowId,
-			);
+			.filter((client) => Number.isInteger(client.pid) && client.pid > 0 && !!client.sessionId && !!client.windowId);
 	} catch {
 		return [];
 	}
+};
+
+const getTmuxClientsForWindow = async (pi: ExtensionAPI, location: TmuxLocation): Promise<TmuxClient[]> => {
+	const clients = await getTmuxClients(pi);
+	return clients.filter((client) => client.sessionId === location.sessionId && client.windowId === location.windowId);
+};
+
+const getTmuxClientsForSession = async (pi: ExtensionAPI, location: TmuxLocation): Promise<TmuxClient[]> => {
+	const clients = await getTmuxClients(pi);
+	return clients.filter((client) => client.sessionId === location.sessionId);
 };
 
 const getAncestorPids = async (pid: number): Promise<number[]> => {
@@ -269,28 +280,42 @@ const findHyprWindowForTmuxClient = async (
 	return hyprClients.find((client) => typeof client.pid === "number" && ancestorPids.has(client.pid) && hyprClientIsUsable(client));
 };
 
-const getPiTmuxWindowTarget = async (pi: ExtensionAPI): Promise<NotifiTarget | undefined> => {
+const getPiTmuxWindowTarget = async (pi: ExtensionAPI, targetId: string): Promise<NotifiTarget | undefined> => {
 	const location = await getTmuxLocation(pi);
 	if (!location) return undefined;
 
-	const [tmuxClients, hyprState] = await Promise.all([getTmuxClientsForWindow(pi, location), getHyprState(pi)]);
-	if (tmuxClients.length === 0 || !hyprState) return undefined;
+	const baseTarget: NotifiTarget = {
+		id: targetId,
+		tmuxSessionId: location.sessionId,
+		tmuxWindowId: location.windowId,
+		timestamp: Date.now(),
+	};
+
+	const [sessionClients, hyprState] = await Promise.all([getTmuxClientsForSession(pi, location), getHyprState(pi)]);
+	if (sessionClients.length === 0 || !hyprState) return baseTarget;
+
+	// Prefer a client already viewing the target window. If none exists, use any
+	// attached client for the same session, focus its Ghostty, then switch it to
+	// the target tmux window. This avoids opening a new Ghostty when the session
+	// is already visible but currently on a different tmux window.
+	const tmuxClients = [
+		...sessionClients.filter((client) => client.windowId === location.windowId),
+		...sessionClients.filter((client) => client.windowId !== location.windowId),
+	];
 
 	for (const tmuxClient of tmuxClients) {
 		const hyprWindow = await findHyprWindowForTmuxClient(tmuxClient.pid, hyprState.clients);
 		if (!hyprWindow || typeof hyprWindow.workspace?.id !== "number" || !hyprWindow.address) continue;
 
 		return {
+			...baseTarget,
 			workspaceId: hyprWindow.workspace.id,
 			hyprWindowAddress: hyprWindow.address,
-			tmuxSessionId: location.sessionId,
-			tmuxWindowId: location.windowId,
 			tmuxClientTty: tmuxClient.tty,
-			timestamp: Date.now(),
 		};
 	}
 
-	return undefined;
+	return baseTarget;
 };
 
 const piTmuxWindowIsVisible = async (pi: ExtensionAPI): Promise<boolean> => {
@@ -308,9 +333,9 @@ const piTmuxWindowIsVisible = async (pi: ExtensionAPI): Promise<boolean> => {
 	return false;
 };
 
-const writeLastTarget = async (target: NotifiTarget | undefined): Promise<void> => {
+const writeTarget = async (target: NotifiTarget | undefined): Promise<void> => {
 	if (!target) return;
-	const path = cacheFile();
+	const path = targetFile(target.id);
 	await mkdir(dirname(path), { recursive: true });
 	await writeFile(path, `${JSON.stringify(target, null, 2)}\n`, "utf8");
 };
@@ -326,7 +351,7 @@ const getStatus = (messages: unknown[]): TaskStatus => {
 	return "finished";
 };
 
-const sendNotification = async (pi: ExtensionAPI, config: NotifiConfig): Promise<void> => {
+const sendNotification = async (pi: ExtensionAPI, config: NotifiConfig, targetId: string | undefined): Promise<void> => {
 	await pi.exec(
 		"bash",
 		[
@@ -338,14 +363,20 @@ const sendNotification = async (pi: ExtensionAPI, config: NotifiConfig): Promise
 				"urgency=$3",
 				"expire_time=$4",
 				"icon=$5",
-				"args=(--wait --action=focus=Focus --app-name pi --urgency \"$urgency\" --expire-time \"$expire_time\")",
+				"target_id=$6",
+				"args=(--app-name pi --urgency \"$urgency\" --expire-time \"$expire_time\")",
 				"if [[ -n \"$icon\" ]]; then args+=(--icon \"$icon\"); fi",
-				"(",
-				"  action=$(notify-send \"${args[@]}\" \"$title\" \"$body\" || true)",
-				"  if [[ \"$action\" == \"focus\" ]]; then",
-				"    /home/red/dotfiles/hypr/scripts/notifi-focus >/dev/null 2>&1 || true",
-				"  fi",
-				") >/tmp/notifi-action.log 2>&1 &",
+				"if [[ -z \"$target_id\" ]]; then",
+				"  notify-send \"${args[@]}\" \"$title\" \"$body\"",
+				"else",
+				"  args=(--wait --action=focus=Focus \"${args[@]}\")",
+				"  (",
+				"    action=$(notify-send \"${args[@]}\" \"$title\" \"$body\" || true)",
+				"    if [[ \"$action\" == \"focus\" ]]; then",
+				"      /home/red/dotfiles/hypr/scripts/notifi-focus \"$target_id\" >/dev/null 2>&1 || true",
+				"    fi",
+				"  ) >/tmp/notifi-action.log 2>&1 &",
+				"fi",
 			].join("\n"),
 			"notifi-send",
 			config.title ?? "pi",
@@ -353,6 +384,7 @@ const sendNotification = async (pi: ExtensionAPI, config: NotifiConfig): Promise
 			config.urgency ?? "normal",
 			config.expireTime ?? "0",
 			config.icon ?? "",
+			targetId ?? "",
 		],
 		{ timeout: 5000 },
 	);
@@ -366,8 +398,10 @@ const notify = async (pi: ExtensionAPI, ctx: ExtensionContext, status: TaskStatu
 	if (await piTmuxWindowIsVisible(pi)) return;
 
 	try {
-		await writeLastTarget(await getPiTmuxWindowTarget(pi));
-		await sendNotification(pi, config);
+		const targetId = randomUUID();
+		const target = await getPiTmuxWindowTarget(pi, targetId);
+		await writeTarget(target);
+		await sendNotification(pi, config, target?.id);
 	} catch (error) {
 		if (ctx.hasUI) {
 			ctx.ui.notify(
@@ -393,6 +427,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("agent_end", async (event, ctx) => {
+		if (!ctx.hasUI) return;
 		if (!state.enabled) return;
 		// If queued steering/follow-up messages remain, this is not the final idle point yet.
 		if (ctx.hasPendingMessages()) return;
