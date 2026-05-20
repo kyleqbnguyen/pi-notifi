@@ -1,16 +1,34 @@
 {
   "name": "pi-notifi",
   "version": "0.1.0",
-  "description": "Pi extension that sends a desktop notification when pi finishes a task.",
+  "description": "Pi extension that sends focus-aware desktop notifications when pi finishes a task.",
   "keywords": [
     "pi-package",
     "pi-extension",
+    "pi",
     "notifications",
-    "dunst",
-    "notify-send"
+    "notification",
+    "notify",
+    "notice",
+    "warning",
+    "ping",
+    "notify-send",
+    "hyprland",
+    "tmux",
+    "ghostty",
+    "dunst"
   ],
-  "license": "MIT",
   "type": "module",
+  "files": [
+    "extensions/",
+    "scripts/",
+    "examples/",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "check": "tsc --noEmit && bash -n scripts/notifi-focus"
+  },
   "pi": {
     "extensions": [
       "./extensions/notifi.ts"

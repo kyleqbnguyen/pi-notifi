@@ -38,6 +38,7 @@ workspace_id="$(jq -r '.workspaceId // empty' "$state_file" 2>/dev/null)" || con
 hypr_window_address="$(jq -r '.hyprWindowAddress // empty' "$state_file" 2>/dev/null)" || consume_bad_target
 tmux_session_id="$(jq -r '.tmuxSessionId // empty' "$state_file" 2>/dev/null)" || consume_bad_target
 tmux_window_id="$(jq -r '.tmuxWindowId // empty' "$state_file" 2>/dev/null)" || consume_bad_target
+tmux_pane_id="$(jq -r '.tmuxPaneId // empty' "$state_file" 2>/dev/null)" || consume_bad_target
 tmux_client_tty="$(jq -r '.tmuxClientTty // empty' "$state_file" 2>/dev/null)" || consume_bad_target
 
 rm -f -- "$state_file"
@@ -60,6 +61,12 @@ hypr_window_exists() {
     hyprctl clients -j | jq -e --arg address "$hypr_window_address" '.[] | select(.address == $address)' >/dev/null
 }
 
+select_saved_pane() {
+  [[ -n "$tmux_pane_id" ]] || return 0
+  tmux list-panes -a -F '#{pane_id}' 2>/dev/null | grep -Fxq "$tmux_pane_id" || return 0
+  tmux select-pane -t "$tmux_pane_id" 2>/dev/null || true
+}
+
 if [[ -n "$workspace_id" ]]; then
   hyprctl dispatch workspace "$workspace_id" >/dev/null || true
 fi
@@ -72,7 +79,9 @@ if hypr_window_exists; then
   else
     tmux select-window -t "$tmux_window_id"
   fi
+  select_saved_pane
 else
   tmux select-window -t "$tmux_window_id"
+  select_saved_pane
   ghostty -e tmux attach-session -t "$tmux_session_id" >/dev/null 2>&1 &
 fi

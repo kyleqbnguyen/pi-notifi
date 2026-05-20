@@ -8,5 +8,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["extensions/**/*.ts", ".pi/extensions/**/*.ts"]
+  "include": ["extensions/**/*.ts"]
 }

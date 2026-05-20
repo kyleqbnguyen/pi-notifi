@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 type NotifiState = {
@@ -14,7 +15,6 @@ type NotifiConfig = {
 	title?: string;
 	body?: string;
 	urgency?: string;
-	icon?: string;
 	expireTime?: string;
 	notifyOnError: boolean;
 	notifyOnAbort: boolean;
@@ -25,7 +25,6 @@ type NotifiFileConfig = Partial<{
 	title: string;
 	body: string;
 	urgency: string;
-	icon: string;
 	expireTime: string | number;
 	notifyOnError: boolean;
 	notifyOnAbort: boolean;
@@ -34,6 +33,7 @@ type NotifiFileConfig = Partial<{
 type TmuxLocation = {
 	sessionId: string;
 	windowId: string;
+	paneId: string;
 	sessionName?: string;
 	windowIndex?: string;
 };
@@ -62,6 +62,7 @@ type NotifiTarget = {
 	hyprWindowAddress?: string;
 	tmuxSessionId: string;
 	tmuxWindowId: string;
+	tmuxPaneId: string;
 	tmuxClientTty?: string;
 	timestamp: number;
 };
@@ -85,6 +86,10 @@ const env = (name: string): string | undefined => {
 	return value && value.trim().length > 0 ? value : undefined;
 };
 
+const extensionDir = dirname(fileURLToPath(import.meta.url));
+const packageRoot = dirname(extensionDir);
+const focusScriptPath = join(packageRoot, "scripts", "notifi-focus");
+
 const fileExists = async (path: string): Promise<boolean> => {
 	try {
 		await access(path);
@@ -94,7 +99,9 @@ const fileExists = async (path: string): Promise<boolean> => {
 	}
 };
 
-const targetFile = (targetId: string): string => join(process.env.HOME ?? "/tmp", ".cache", "notifi", "targets", `${targetId}.json`);
+const cacheHome = (): string => process.env.XDG_CACHE_HOME ?? join(process.env.HOME ?? "/tmp", ".cache");
+
+const targetFile = (targetId: string): string => join(cacheHome(), "notifi", "targets", `${targetId}.json`);
 
 const readConfigFile = async (cwd: string): Promise<NotifiFileConfig> => {
 	const paths = [join(cwd, ".pi", "notifi.json"), join(process.env.HOME ?? "", ".pi", "agent", "notifi.json")];
@@ -150,7 +157,6 @@ const getConfig = async (pi: ExtensionAPI, ctx: ExtensionContext, status: TaskSt
 		title: env("PI_NOTIFI_TITLE") ?? configString(fileConfig.title) ?? tmuxTitle ?? "pi",
 		body: env("PI_NOTIFI_BODY") ?? configString(fileConfig.body) ?? statusBody(status),
 		urgency: env("PI_NOTIFI_URGENCY") ?? configString(fileConfig.urgency) ?? (status === "finished" ? "normal" : "critical"),
-		icon: env("PI_NOTIFI_ICON") ?? configString(fileConfig.icon),
 		expireTime: env("PI_NOTIFI_EXPIRE_TIME") ?? configString(fileConfig.expireTime) ?? "0",
 		notifyOnError: !truthy(process.env.PI_NOTIFI_NOTIFY_ON_ERROR_DISABLED) && configBoolean(fileConfig.notifyOnError) !== false,
 		notifyOnAbort: truthy(process.env.PI_NOTIFI_NOTIFY_ON_ABORT) || configBoolean(fileConfig.notifyOnAbort) === true,
@@ -171,12 +177,12 @@ const getTmuxLocation = async (pi: ExtensionAPI): Promise<TmuxLocation | undefin
 	if (!process.env.TMUX || !pane) return undefined;
 
 	try {
-		const result = await pi.exec("tmux", ["display-message", "-p", "-t", pane, "#{session_id}\t#{window_id}\t#S\t#{window_index}"], {
+		const result = await pi.exec("tmux", ["display-message", "-p", "-t", pane, "#{session_id}\t#{window_id}\t#{pane_id}\t#S\t#{window_index}"], {
 			timeout: 2000,
 		});
-		const [sessionId, windowId, sessionName, windowIndex] = result.stdout.trim().split("\t");
-		if (!sessionId || !windowId) return undefined;
-		return { sessionId, windowId, sessionName, windowIndex };
+		const [sessionId, windowId, paneId, sessionName, windowIndex] = result.stdout.trim().split("\t");
+		if (!sessionId || !windowId || !paneId) return undefined;
+		return { sessionId, windowId, paneId, sessionName, windowIndex };
 	} catch {
 		return undefined;
 	}
@@ -293,6 +299,7 @@ const getPiTmuxWindowTarget = async (pi: ExtensionAPI, targetId: string): Promis
 		id: targetId,
 		tmuxSessionId: location.sessionId,
 		tmuxWindowId: location.windowId,
+		tmuxPaneId: location.paneId,
 		timestamp: Date.now(),
 	};
 
@@ -367,10 +374,9 @@ const sendNotification = async (pi: ExtensionAPI, config: NotifiConfig, targetId
 				"body=$2",
 				"urgency=$3",
 				"expire_time=$4",
-				"icon=$5",
-				"target_id=$6",
+				"target_id=$5",
+				"focus_script=$6",
 				"args=(--app-name pi --urgency \"$urgency\" --expire-time \"$expire_time\")",
-				"if [[ -n \"$icon\" ]]; then args+=(--icon \"$icon\"); fi",
 				"if [[ -z \"$target_id\" ]]; then",
 				"  notify-send \"${args[@]}\" \"$title\" \"$body\"",
 				"else",
@@ -378,9 +384,9 @@ const sendNotification = async (pi: ExtensionAPI, config: NotifiConfig, targetId
 				"  (",
 				"    action=$(notify-send \"${args[@]}\" \"$title\" \"$body\" || true)",
 				"    if [[ \"$action\" == \"focus\" ]]; then",
-				"      /home/red/dotfiles/hypr/scripts/notifi-focus \"$target_id\" >/dev/null 2>&1 || true",
+				"      \"$focus_script\" \"$target_id\" >/dev/null 2>&1 || true",
 				"    fi",
-				"  ) >/tmp/notifi-action.log 2>&1 &",
+				"  ) >/dev/null 2>&1 &",
 				"fi",
 			].join("\n"),
 			"notifi-send",
@@ -388,8 +394,8 @@ const sendNotification = async (pi: ExtensionAPI, config: NotifiConfig, targetId
 			config.body ?? "Task Finished",
 			config.urgency ?? "normal",
 			config.expireTime ?? "0",
-			config.icon ?? "",
 			targetId ?? "",
+			focusScriptPath,
 		],
 		{ timeout: 5000 },
 	);
