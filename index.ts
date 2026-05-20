@@ -103,7 +103,12 @@ const cacheHome = (): string => process.env.XDG_CACHE_HOME ?? join(process.env.H
 const targetFile = (targetId: string): string => join(cacheHome(), "notifi", "targets", `${targetId}.json`);
 
 const readConfigFile = async (cwd: string): Promise<NotifiFileConfig> => {
-	const paths = [join(cwd, ".pi", "notifi.json"), join(process.env.HOME ?? "", ".pi", "agent", "notifi.json")];
+	const home = process.env.HOME ?? "";
+	const paths = [
+		join(cwd, ".pi", "notifi.json"),
+		join(home, ".pi", "agent", "notifi.json"),
+		join(home, ".pi", "agent", "extensions", "notifi.json"),
+	];
 
 	for (const path of paths) {
 		if (!path || !(await fileExists(path))) continue;

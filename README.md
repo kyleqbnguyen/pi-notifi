@@ -111,6 +111,7 @@ Configuration is read from the first valid JSON file that exists:
 
 1. `<project>/.pi/notifi.json`
 2. `~/.pi/agent/notifi.json`
+3. `~/.pi/agent/extensions/notifi.json`
 
 Example:
 
