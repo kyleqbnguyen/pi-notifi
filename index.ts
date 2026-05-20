@@ -86,8 +86,7 @@ const env = (name: string): string | undefined => {
 	return value && value.trim().length > 0 ? value : undefined;
 };
 
-const extensionDir = dirname(fileURLToPath(import.meta.url));
-const packageRoot = dirname(extensionDir);
+const packageRoot = dirname(fileURLToPath(import.meta.url));
 const focusScriptPath = join(packageRoot, "scripts", "notifi-focus");
 
 const fileExists = async (path: string): Promise<boolean> => {

@@ -1,11 +1,11 @@
 # pi-notifi
 
-A [pi](https://pi.dev/) package that sends desktop notifications when an
-interactive pi task finishes, unless the tmux window containing that pi agent is
-already visible in Hyprland.
+A focus-aware desktop notification package for [pi](https://pi.dev/). It sends a
+notification when an interactive pi task finishes, but skips the notification if
+the tmux window containing that pi agent is already visible in Hyprland.
 
 Notifications include a `Focus` action that jumps back to the originating pi
-agent by focusing the saved Hyprland/Ghostty/tmux target.
+agent by restoring the saved Hyprland/Ghostty/tmux target.
 
 This package is intentionally developed for an Arch + Hyprland + Ghostty +
 tmux + dunst workflow. If your setup differs, copy/fork it and adapt the small
@@ -75,7 +75,7 @@ Hyprland binds:
 
 ```ini
 bind = SUPER, X, exec, dunstctl close
-bind = SUPER, N, exec, dunstctl action 0 && dunstctl close
+bind = SUPER, N, exec, dunstctl action
 ```
 
 Dunst mouse behavior:
@@ -88,7 +88,7 @@ mouse_right_click = close_current
 Behavior:
 
 - `SUPER X` / right click: close the current notification without action.
-- `SUPER N` / left click: invoke the notification action, then close it.
+- `SUPER N` / left click: invoke the notification action. Dunst closes actioned notifications automatically.
 - For notifi notifications, the action jumps to the Ghostty/tmux location that
   produced that specific notification.
 
