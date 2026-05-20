@@ -50,9 +50,8 @@ Inside pi:
 ```text
 /notifi status
 /notifi test
-/notifi visible
-/notifi on
-/notifi off
+/notifi on|enable
+/notifi off|disable
 ```
 
 `on`/`off` are persisted into the current pi session.

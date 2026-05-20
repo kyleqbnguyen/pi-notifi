@@ -298,7 +298,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("notifi", {
-		description: "Manage desktop notifications when pi finishes a task: status | on | off | test | visible",
+		description: "Manage desktop notifications when pi finishes a task: status | test | on/enable | off/disable",
 		handler: async (args, ctx) => {
 			const subcommand = args.trim().toLowerCase() || "status";
 			if (subcommand === "on" || subcommand === "enable") {
@@ -318,12 +318,6 @@ export default function (pi: ExtensionAPI) {
 			if (subcommand === "test") {
 				await notify(pi, ctx, "finished");
 				ctx.ui.notify("notifi test sent", "info");
-				return;
-			}
-
-			if (subcommand === "visible" || subcommand === "focus") {
-				const visible = await piTmuxWindowIsVisible(pi);
-				ctx.ui.notify(`notifi visibility: pi tmux window is ${visible ? "visible" : "not visible/unknown"}`, "info");
 				return;
 			}
 
