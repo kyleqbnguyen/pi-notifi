@@ -4,6 +4,8 @@ A tiny [pi](https://pi.dev) extension that sends a desktop notification when pi 
 
 It is designed for Linux notification daemons such as `dunst` and uses `notify-send` by default.
 
+On Hyprland + tmux, notifications are focus-aware by default: if the tmux window containing the pi agent is visible on a visible Hyprland workspace, notifi suppresses the notification.
+
 ## Install / use
 
 ### Project-local development
@@ -48,6 +50,7 @@ Inside pi:
 ```text
 /notifi status
 /notifi test
+/notifi visible
 /notifi on
 /notifi off
 ```
@@ -70,6 +73,7 @@ Environment variables:
 | `PI_NOTIFI_EXPIRE_TIME` | `0` | notify-send expire time in ms; `0` requests persistence until dismissed |
 | `PI_NOTIFI_ON_ERROR_ONLY=1` | unset | Only notify on errors; aborts still require `PI_NOTIFI_NOTIFY_ON_ABORT=1` |
 | `PI_NOTIFI_NOTIFY_ON_ABORT=1` | unset | Notify when a task is aborted |
+| `PI_NOTIFI_FOCUS_AWARE=0` | enabled | Disable Hyprland/tmux visibility checks |
 | `PI_NOTIFI_BELL_FALLBACK=0` | enabled | Disable terminal bell fallback if notify-send fails |
 
 Example:
@@ -84,5 +88,15 @@ pi
 ## How it works
 
 pi extensions can subscribe to agent lifecycle events. `notifi` listens for `agent_end`, checks that no queued follow-up/steering messages remain, and then calls the OS notification command via `pi.exec()`.
+
+Focus-aware mode is best-effort. It suppresses notifications only when all of these are true:
+
+1. pi is running inside tmux.
+2. notifi can identify the tmux session/window containing the pi pane.
+3. an attached tmux client is currently viewing that same tmux window.
+4. that client maps through its process tree to a Hyprland window.
+5. that Hyprland window is on a workspace visible on a monitor.
+
+Pane focus does not matter: if the pi pane is in the currently visible tmux window, notification is suppressed. If visibility cannot be determined, notifi sends the notification.
 
 pi itself does not emit a dunst-specific signal by default. For headless integrations, `pi --mode json` and `pi --mode rpc` also emit `agent_end` events that external programs can watch.
