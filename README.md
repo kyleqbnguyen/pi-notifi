@@ -118,22 +118,52 @@ Example:
 ```json
 {
   "disabled": false,
-  "urgency": "normal",
-  "expireTime": 0,
-  "notifyOnError": true
+  "defaults": {
+    "urgency": "normal",
+    "expireTime": 0
+  },
+  "events": {
+    "finished": {
+      "body": "Task Finished"
+    },
+    "error": {
+      "body": "Task Failed",
+      "urgency": "critical"
+    },
+    "aborted": {
+      "disabled": true,
+      "body": "Task Aborted"
+    }
+  }
 }
 ```
 
-Available JSON fields:
+Top-level fields:
 
-| Field           | Default                                          | Description                                                         |
-| --------------- | ------------------------------------------------ | ------------------------------------------------------------------- |
-| `disabled`      | `false`                                          | Start disabled                                                      |
-| `title`         | `<tmux-session>:<window-index>` or `pi`          | Notification title                                                  |
-| `body`          | `Task Finished` / `Task Failed`                  | Notification body                                                   |
-| `urgency`       | `normal` / `critical`                            | notify-send urgency                                                 |
-| `expireTime`    | `0`                                              | notify-send expire time in ms; `0` requests persist until dismissed |
-| `notifyOnError` | `true`                                           | Notify when a task fails                                            |
+| Field      | Default | Description                    |
+| ---------- | ------- | ------------------------------ |
+| `disabled` | `false` | Disable all notifi events      |
+| `defaults` | `{}`    | Shared defaults for all events |
+| `events`   | `{}`    | Per-event notification config  |
+
+Supported events:
+
+| Event      | Default disabled | Default focus-aware | Default body    | Default urgency |
+| ---------- | ---------------- | ------------------- | --------------- | --------------- |
+| `finished` | `false`          | `true`              | `Task Finished` | `normal`        |
+| `error`    | `false`          | `false`             | `Task Failed`   | `critical`      |
+| `aborted`  | `true`           | `false`             | `Task Aborted`  | `normal`        |
+
+Each event, and `defaults`, supports:
+
+| Field        | Default                                 | Description                                                         |
+| ------------ | --------------------------------------- | ------------------------------------------------------------------- |
+| `disabled`   | event-specific                          | Disable notifications for this event                                |
+| `focusAware` | event-specific                          | If true, suppress this event when the pi tmux window is visible     |
+| `title`      | `<tmux-session>:<window-index>` or `pi` | Notification title                                                  |
+| `body`       | event-specific                          | Notification body                                                   |
+| `urgency`    | event-specific                          | notify-send urgency: `low`, `normal`, or `critical`                 |
+| `expireTime` | `0`                                     | notify-send expire time in ms; `0` requests persist until dismissed |
 
 Environment variables with the old `PI_NOTIFI_*` names override JSON for quick
 one-off changes. Invalid JSON config files are ignored so a bad config does not
@@ -141,7 +171,7 @@ break notification delivery.
 
 ## Behavior
 
-Notification is suppressed only when all of these are true:
+For focus-aware events, notification is suppressed only when all of these are true:
 
 1. pi is running inside tmux.
 2. notifi identifies the tmux session/window containing the pi pane.
@@ -159,11 +189,15 @@ If the tmux window is not visible, notifi sends a persistent notification with a
 
 ```text
 <title: tmux-session:window-index>
-<body: Task Finished | Task Failed>
+<body: Task Finished | Task Failed | Task Aborted>
 <action: Focus>
 ```
 
-Headless/print-mode pi runs do not notify.
+Only `finished` is focus-aware by default. `error` and `aborted` are not
+focus-aware by default, so enabled error/abort notifications fire even when the
+pi tmux window is visible. Aborted tasks still do not notify by default because
+the `aborted` event is disabled by default. Headless/print-mode pi runs do not
+notify.
 
 ## Action target cache
 

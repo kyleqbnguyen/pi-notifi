@@ -8,24 +8,32 @@ type NotifiState = {
 	enabled: boolean;
 };
 
-type TaskStatus = "finished" | "error";
+type TaskStatus = "finished" | "error" | "aborted";
 
-type NotifiConfig = {
-	disabled: boolean;
+type NotifiEventConfig = {
+	disabled?: boolean;
+	focusAware?: boolean;
 	title?: string;
 	body?: string;
 	urgency?: string;
 	expireTime?: string;
-	notifyOnError: boolean;
 };
+
+type NotifiConfig = Required<NotifiEventConfig>;
 
 type NotifiFileConfig = Partial<{
 	disabled: boolean;
+	defaults: NotifiFileEventConfig;
+	events: Partial<Record<TaskStatus, NotifiFileEventConfig>>;
+}>;
+
+type NotifiFileEventConfig = Partial<{
+	disabled: boolean;
+	focusAware: boolean;
 	title: string;
 	body: string;
 	urgency: string;
 	expireTime: string | number;
-	notifyOnError: boolean;
 }>;
 
 type TmuxLocation = {
@@ -132,6 +140,7 @@ const configBoolean = (value: unknown): boolean | undefined => (typeof value ===
 
 const statusBody = (status: TaskStatus): string => {
 	if (status === "finished") return "Task Finished";
+	if (status === "aborted") return "Task Aborted";
 	return "Task Failed";
 };
 
@@ -150,16 +159,48 @@ const getTmuxSessionTitle = async (pi: ExtensionAPI): Promise<string | undefined
 	}
 };
 
+const normalizeEventConfig = (config: NotifiFileEventConfig | undefined): NotifiEventConfig => ({
+	disabled: configBoolean(config?.disabled),
+	focusAware: configBoolean(config?.focusAware),
+	title: configString(config?.title),
+	body: configString(config?.body),
+	urgency: configString(config?.urgency),
+	expireTime: configString(config?.expireTime),
+});
+
+const mergeEventConfig = (...configs: NotifiEventConfig[]): NotifiEventConfig =>
+	configs.reduce<NotifiEventConfig>((merged, config) => ({ ...merged, ...withoutUndefined(config) }), {});
+
+const withoutUndefined = <T extends Record<string, unknown>>(value: T): Partial<T> =>
+	Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as Partial<T>;
+
+const builtInEventConfig = (status: TaskStatus, title: string): NotifiConfig => ({
+	disabled: status === "aborted",
+	focusAware: status === "finished",
+	title,
+	body: statusBody(status),
+	urgency: status === "error" ? "critical" : "normal",
+	expireTime: "0",
+});
+
 const getConfig = async (pi: ExtensionAPI, ctx: ExtensionContext, status: TaskStatus): Promise<NotifiConfig> => {
 	const [tmuxTitle, fileConfig] = await Promise.all([getTmuxSessionTitle(pi), readConfigFile(ctx.cwd)]);
+	const title = tmuxTitle ?? "pi";
+	const config = mergeEventConfig(
+		builtInEventConfig(status, title),
+		normalizeEventConfig(fileConfig.defaults),
+		normalizeEventConfig(fileConfig.events?.[status]),
+		{
+			title: env("PI_NOTIFI_TITLE"),
+			body: env("PI_NOTIFI_BODY"),
+			urgency: env("PI_NOTIFI_URGENCY"),
+			expireTime: env("PI_NOTIFI_EXPIRE_TIME"),
+		},
+	) as NotifiConfig;
 
 	return {
-		disabled: truthy(process.env.PI_NOTIFI_DISABLED) || configBoolean(fileConfig.disabled) === true,
-		title: env("PI_NOTIFI_TITLE") ?? configString(fileConfig.title) ?? tmuxTitle ?? "pi",
-		body: env("PI_NOTIFI_BODY") ?? configString(fileConfig.body) ?? statusBody(status),
-		urgency: env("PI_NOTIFI_URGENCY") ?? configString(fileConfig.urgency) ?? (status === "finished" ? "normal" : "critical"),
-		expireTime: env("PI_NOTIFI_EXPIRE_TIME") ?? configString(fileConfig.expireTime) ?? "0",
-		notifyOnError: !truthy(process.env.PI_NOTIFI_NOTIFY_ON_ERROR_DISABLED) && configBoolean(fileConfig.notifyOnError) !== false,
+		...config,
+		disabled: truthy(process.env.PI_NOTIFI_DISABLED) || configBoolean(fileConfig.disabled) === true || config.disabled,
 	};
 };
 
@@ -358,6 +399,7 @@ const getStatus = (messages: unknown[]): TaskStatus => {
 		const message = messages[i] as { role?: string; stopReason?: string };
 		if (message?.role !== "assistant") continue;
 		if (message.stopReason === "error") return "error";
+		if (message.stopReason === "aborted") return "aborted";
 		return "finished";
 	}
 	return "finished";
@@ -404,8 +446,7 @@ const sendNotification = async (pi: ExtensionAPI, config: NotifiConfig, targetId
 const notify = async (pi: ExtensionAPI, ctx: ExtensionContext, status: TaskStatus) => {
 	const config = await getConfig(pi, ctx, status);
 	if (config.disabled) return;
-	if (status === "error" && !config.notifyOnError) return;
-	if (await piTmuxWindowIsVisible(pi)) return;
+	if (config.focusAware && (await piTmuxWindowIsVisible(pi))) return;
 
 	try {
 		const targetId = randomUUID();
